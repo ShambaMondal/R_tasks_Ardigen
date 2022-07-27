@@ -1,0 +1,163 @@
+---
+title: "R_tasks_Ardigen"
+author: "Shamba Mondal"
+date: '2022-06-22'
+output: html_document
+---
+```{r}
+library(dplyr)
+library(comprehenr)
+library(ggplot2)
+library(DT)
+library(shiny)
+```
+1) Say hello: display your first and last name
+
+```{r}
+print('Hello! - Shamba Mondal', quote = FALSE)
+```
+
+2) Display data summary:
+- Number of organisms
+- Number of genes
+- Number of "empty" organisms (organisms without any gene available)
+
+```{r}
+genes_df <- read.csv('genes.csv')
+orgs_df <- read.csv('organisms.csv')
+df <- merge(genes_df, orgs_df, by='assembly')
+
+unique_orgs <- distinct(select(orgs_df, organism)) #orgs_df %>% select(organism) %>% distinct()
+unique_genes <- distinct(select(genes_df, locus_tag))  #genes_df %>% select(locus_tag) %>% distinct()
+unique_proteins <- distinct(select(genes_df, protein))  #genes_df %>% select(protein) %>% distinct()
+orgs_in_df <- distinct(select(df, organism)) #df %>% select(organism) %>% distinct()
+empty_orgs <- setdiff(unique_orgs, orgs_in_df)
+
+cat('============= Data summary =============\nNumber of organisms: ', nrow(unique_orgs), '\nNumber of genes (locus_tag): ', nrow(unique_genes), '\nNumber of proteins: ', nrow(unique_proteins), '\nNumber of organisms without any gene available: ', nrow(empty_orgs))
+```
+
+3) Calculate number of genes per organism and display it as a table
+
+```{r}
+df1 <- select(df, organism, locus_tag)
+#df1 %>% group_by(organism) %>% tally()
+gene_count <- count(df1, organism, sort=TRUE) %>% rename(genes = n)
+datatable(data = gene_count)
+```
+
+4) Calculate the following gene statistics (don't display it in the report):
+- gene length
+- intergenic size (distance to the previous gene, in nucleotides)
+
+```{r}
+# calculate gene length
+df['gene_length'] <- df['location_end'] - df['location_start']
+# calculate intergenic size
+df <- arrange(df, assembly, location_start)
+df['intergenic_size'] <- 0
+
+# the intergenic_size for the first gene of an organism is assigned zero,
+# If gene1 and gene2 overlaps, and gene2's location_start < gene1's location_end, then intergenic_size is -ve integer.
+for (org in orgs_in_df$organism){
+  indices <- which(df$organism == org)
+  prev_ind <- indices[1]
+  for (ind in indices[2:length(indices)]){
+    df[ind, 'intergenic_size'] <- df[ind, 'location_start'] - df[prev_ind, 'location_end']
+    prev_ind <- ind
+  }
+}
+```
+
+5) Calculate correlation coefficients (gene length vs intergenic size) per each organism
+- display results as a table
+- sort by effect (strongest first)
+```{r}
+#corr_df <- to_list(for (ogn in orgs_in_df$organism) c(ogn, cor(df[df$organism == ogn,]['gene_length'], df[df$organism == ogn,]['intergenic_size'])))
+
+func <- function(df){
+  return(data.frame(correlation = format(cor(df$gene_length, df$intergenic_size), scientific = FALSE)))
+}
+df2 <- df %>% group_by(organism) %>% do(func(.))
+df2 <- arrange(df2, desc(as.numeric(correlation)))
+datatable(data = df2)
+```
+
+6) Pick 5 organisms with the strongest correlation for further analysis
+
+```{r}
+top_5_orgs <- df2$organism[1:5]
+top_5_orgs <- sort(top_5_orgs, decreasing = TRUE)
+final_df <- df[df$organism %in% c(top_5_orgs),]
+top_5_orgs
+```
+
+7) Draw a boxplot of gene lengths per organism
+- use horizontal orientation
+- sort organisms by name (A-Z, top to bottom)
+
+```{r}
+final_df$organism <- factor(final_df$organism, levels = top_5_orgs)
+box_plot <- ggplot(final_df, aes(x= gene_length, y= organism)) + geom_boxplot()
+box_plot
+```
+
+8) Draw a scatterplot of gene length vs intergenic size
+- color by organism
+- include global (all data) regression line
+
+```{r}
+sca_reg_plot <- ggplot(final_df, aes(x= gene_length, y= intergenic_size)) + geom_point(aes(color = organism)) + geom_smooth(method = 'lm')
+sca_reg_plot
+```
+
+9) Draw plot of regression curves per organism
+- include global regression for comparison purposes (with dashed line type)
+
+```{r}
+reg_plot <- ggplot(final_df, aes(x= gene_length, y= intergenic_size)) + geom_point(aes(color = organism)) + geom_smooth(aes(color= organism), method = 'lm', se= FALSE) + geom_smooth(method = 'lm', se= FALSE, linetype= 'dashed')
+reg_plot
+```
+
+10) Display table of gene statistics per organism:
+- each organism should be in a separate tab
+- sort tabs alphabetically
+- show protein ID, gene name, protein description, gene length and intergenic size
+- sort genes by length
+- display only 15 genes at once
+- add possibility to filter results in column headers
+
+```{r}
+# this interactive datatable has been created with shiny, and the datatable does not get knitted into the static html generated with Knit. The interactive datatable can be viewed when the Rmd file is executed on RStudio during a live session, for example.
+
+final_df <- select(final_df, organism, locus_tag, gene_name, protein_id, protein, gene_length, intergenic_size)
+
+ui <- fluidPage(
+  br(),
+  mainPanel(
+      
+      tabsetPanel(type = "tabs", id = "organ",
+                  tabPanel("Enterococcus asini", tableOutput("table1")),
+                  tabPanel("Lactobacillus algidus", tableOutput("table2")),
+                  tabPanel("Listeria marthii", tableOutput("table3")),
+                  tabPanel("Pediococcus inopinatus", tableOutput("table4")),
+                  tabPanel("Pediococcus stilesii", tableOutput("table5"))
+      ),
+      br(),
+      DT::dataTableOutput('tbl')
+)
+)
+
+server <- function(input, output){
+  
+   output$tbl <- renderDT({datatable(final_df[final_df$organism == input$organ,], filter = 'top', options = list(
+  pageLength = 15, autoWidth = TRUE, order = list(6, 'asc')))})
+  
+}
+
+shinyApp(ui = ui, server = server)
+
+```
+
+
+```
+```
